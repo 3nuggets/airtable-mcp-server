@@ -2,7 +2,6 @@ import { Hono } from "hono";
 import type { AuthRequest, OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import type { Env, AirtableTokenResponse } from "./types";
 import { saveTokens, tokensFromResponse } from "./tokens";
-import { verifySignedUrl, getObject, putObject } from "./r2files";
 
 /**
  * OAuth scopes requested from Airtable. These MUST also be enabled on your
@@ -43,12 +42,6 @@ async function pkceChallenge(verifier: string): Promise<string> {
   return base64url(new Uint8Array(digest));
 }
 
-/** Remember the Worker's own public origin so tools can build /files URLs. */
-async function rememberOrigin(env: Env, reqUrl: string): Promise<void> {
-  const origin = new URL(reqUrl).origin;
-  await env.OAUTH_KV.put("config:public_origin", origin);
-}
-
 // --- Health -----------------------------------------------------------------
 
 app.get("/", (c) => c.text("Airtable MCP server. Connect via /mcp (or /sse)."));
@@ -58,7 +51,6 @@ app.get("/health", (c) => c.json({ ok: true }));
 
 // Step 1: an MCP client hits /authorize; we redirect the user to Airtable.
 app.get("/authorize", async (c) => {
-  await rememberOrigin(c.env, c.req.url);
   const oauthReqInfo = await c.env.OAUTH_PROVIDER.parseAuthRequest(c.req.raw);
   if (!oauthReqInfo.clientId) return c.text("Invalid OAuth request", 400);
 
@@ -86,7 +78,6 @@ app.get("/authorize", async (c) => {
 
 // Step 2: Airtable redirects back with ?code&state; exchange + complete grant.
 app.get("/callback", async (c) => {
-  await rememberOrigin(c.env, c.req.url);
   const error = c.req.query("error");
   if (error) return c.text(`Airtable authorization failed: ${error}`, 400);
 
@@ -144,34 +135,6 @@ app.get("/callback", async (c) => {
     },
   });
   return c.redirect(redirectTo);
-});
-
-// --- Signed file routes (public, HMAC-gated) --------------------------------
-
-// Airtable (or anyone with the signed URL) downloads a staged attachment.
-app.get("/files/:key", async (c) => {
-  const key = decodeURIComponent(c.req.param("key"));
-  const ok = await verifySignedUrl(c.env, key, "GET", c.req.query("exp") ?? null, c.req.query("sig") ?? null);
-  if (!ok) return c.text("Forbidden", 403);
-
-  const obj = await getObject(c.env, key);
-  if (!obj) return c.text("Not found", 404);
-
-  const headers = new Headers();
-  obj.writeHttpMetadata(headers);
-  headers.set("etag", obj.httpEtag);
-  return new Response(obj.body, { headers });
-});
-
-// The upload client (e.g. Claude Code) streams file bytes straight into R2.
-app.put("/upload/:key", async (c) => {
-  const key = decodeURIComponent(c.req.param("key"));
-  const ok = await verifySignedUrl(c.env, key, "PUT", c.req.query("exp") ?? null, c.req.query("sig") ?? null);
-  if (!ok) return c.text("Forbidden", 403);
-  if (!c.req.raw.body) return c.text("Empty body", 400);
-
-  await putObject(c.env, key, c.req.raw.body, c.req.header("content-type"));
-  return c.json({ ok: true, key });
 });
 
 export { app as AirtableHandler };

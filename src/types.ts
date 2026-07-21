@@ -12,8 +12,10 @@ export interface Env extends Cloudflare.Env {
   // Secrets (set via `wrangler secret put`)
   AIRTABLE_CLIENT_ID: string;
   AIRTABLE_CLIENT_SECRET: string;
-  /** Signs the short-lived /files (GET) and /upload (PUT) URLs. */
-  FILE_SIGNING_SECRET: string;
+  /** R2 S3 API token, used to presign upload/download URLs for staging attachments. */
+  R2_ACCESS_KEY_ID: string;
+  R2_SECRET_ACCESS_KEY: string;
+  // R2_ACCOUNT_ID comes from Cloudflare.Env (wrangler.jsonc vars).
 }
 
 /**

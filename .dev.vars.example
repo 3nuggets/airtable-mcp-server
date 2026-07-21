@@ -5,6 +5,10 @@
 AIRTABLE_CLIENT_ID=
 AIRTABLE_CLIENT_SECRET=
 
-# Any long random string. Signs the short-lived /files and /upload URLs.
-# Generate one with:  openssl rand -hex 32
-FILE_SIGNING_SECRET=
+# R2 S3 API token (Cloudflare dashboard → R2 → Manage API Tokens → Create API Token).
+# Used to presign upload/download URLs for staging attachments.
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=
+
+# Your Cloudflare account ID (also set as a var in wrangler.jsonc for production).
+R2_ACCOUNT_ID=2115b864ac701ed7e286669a3b3a7656

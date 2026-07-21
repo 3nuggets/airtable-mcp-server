@@ -1,14 +1,16 @@
 import type { Env } from "./types";
 import { AirtableClient, encodePathSegment } from "./airtable";
-import { makeKey, mintSignedUrl, putObject, deleteObject } from "./r2files";
+import { makeKey, presignGet, presignPut, putObject, headObject, deleteObject } from "./r2files";
 
-/** How long Airtable is given to fetch the staged file (seconds). */
+/** How long the presigned URL stays valid for Airtable's async ingestion (seconds). */
 const STAGED_URL_TTL = 2 * 60 * 60;
 /** Ingestion polling. */
 const POLL_INTERVAL_MS = 1500;
 const POLL_TIMEOUT_MS = 60_000;
 /** Max bytes we will inline as base64 in a tool result. */
 const MAX_INLINE_BYTES = 8 * 1024 * 1024;
+/** Airtable's maximum attachment size: 5 GB per file. This is our hard threshold. */
+export const MAX_ATTACHMENT_BYTES = 5_000_000_000;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -40,16 +42,6 @@ export function bytesToBase64(buf: ArrayBuffer): string {
   return btoa(bin);
 }
 
-export async function getPublicOrigin(env: Env): Promise<string> {
-  const origin = await env.OAUTH_KV.get("config:public_origin");
-  if (!origin) {
-    throw new Error(
-      "Public origin not yet known. Open the Worker URL once (or reconnect the connector) so it can be recorded.",
-    );
-  }
-  return origin;
-}
-
 /** Decode base64 content into R2 and return the staged key. */
 export async function stageContent(
   env: Env,
@@ -59,18 +51,20 @@ export async function stageContent(
 ): Promise<string> {
   const key = makeKey(filename);
   const bytes = base64ToBytes(base64);
+  if (bytes.length > MAX_ATTACHMENT_BYTES) {
+    throw new Error(`File is ${bytes.length} bytes, over Airtable's 5 GB attachment limit.`);
+  }
   await putObject(env, key, bytes, contentType);
   return key;
 }
 
-/** Mint a signed PUT URL for a fresh key so a client can stream bytes into R2. */
+/** Presign a PUT URL for a fresh key so a client can stream bytes straight into R2. */
 export async function createUploadSlot(
   env: Env,
   filename: string,
 ): Promise<{ key: string; uploadUrl: string; expiresInSeconds: number }> {
-  const origin = await getPublicOrigin(env);
   const key = makeKey(filename);
-  const uploadUrl = await mintSignedUrl(env, origin, key, "PUT", STAGED_URL_TTL);
+  const uploadUrl = await presignPut(env, key, STAGED_URL_TTL);
   return { key, uploadUrl, expiresInSeconds: STAGED_URL_TTL };
 }
 
@@ -103,8 +97,20 @@ export async function attachStagedFile(
 ): Promise<{ attachment: AirtableAttachment | null; note?: string }> {
   const { baseId, tableIdOrName, recordId, attachmentField, filename, key } = args;
   const byId = /^fld/.test(attachmentField);
-  const origin = await getPublicOrigin(env);
-  const fileUrl = await mintSignedUrl(env, origin, key, "GET", STAGED_URL_TTL);
+
+  // Confirm the staged object exists and is within Airtable's size limit.
+  const head = await headObject(env, key);
+  if (!head) {
+    throw new Error(
+      "Staged file not found in R2. If you used create_attachment_upload_url, make sure the PUT to uploadUrl completed successfully.",
+    );
+  }
+  if (head.size > MAX_ATTACHMENT_BYTES) {
+    await deleteObject(env, key);
+    throw new Error(`File is ${head.size} bytes, over Airtable's 5 GB attachment limit.`);
+  }
+
+  const fileUrl = await presignGet(env, key, STAGED_URL_TTL);
   const path = recordPath(baseId, tableIdOrName, recordId);
 
   // Snapshot existing attachments so we can (a) append and (b) detect the new one.

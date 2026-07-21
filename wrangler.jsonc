@@ -20,10 +20,16 @@
   // Create with: npx wrangler r2 bucket create airtable-mcp-files
   "r2_buckets": [{ "binding": "ATTACHMENTS_BUCKET", "bucket_name": "airtable-mcp-files" }],
 
-  "observability": { "enabled": true }
+  "observability": { "enabled": true },
+
+  // Non-secret vars. R2_ACCOUNT_ID is your Cloudflare account ID (used in the R2 S3 host).
+  "vars": {
+    "R2_ACCOUNT_ID": "2115b864ac701ed7e286669a3b3a7656"
+  }
 
   // Secrets (set via `npx wrangler secret put <NAME>`):
   //   AIRTABLE_CLIENT_ID       — from your Airtable OAuth integration
   //   AIRTABLE_CLIENT_SECRET   — from your Airtable OAuth integration
-  //   FILE_SIGNING_SECRET      — random string; signs the temporary /files + /upload URLs
+  //   R2_ACCESS_KEY_ID         — R2 S3 API token (R2 → Manage API Tokens)
+  //   R2_SECRET_ACCESS_KEY     — R2 S3 API token secret
 }

@@ -1,77 +1,57 @@
+import { AwsClient } from "aws4fetch";
 import type { Env } from "./types";
 
 /**
- * Staging store for attachment bytes on Cloudflare R2, plus HMAC-signed, short-lived
- * URLs so Airtable (and the upload client) can GET/PUT an object without any R2
- * credentials. Everything runs off the R2 *binding* — no S3 API tokens required.
+ * Staging store for attachment bytes on Cloudflare R2 using presigned S3 URLs, so
+ * both the upload client and Airtable talk to R2 directly (bytes never pass through
+ * the Worker's ~100 MB request-body limit). Supports files up to Airtable's 5 GB max.
  *
- *   PUT  /upload/:key?exp=&sig=   -> client streams file bytes into R2
- *   GET  /files/:key?exp=&sig=    -> Airtable fetches the staged file, then we delete it
+ *   presignPut  -> client streams file bytes straight into R2 (up to 5 GB)
+ *   presignGet  -> Airtable fetches the staged file for ingestion, then we delete it
+ *
+ * Direct object ops (put/head/delete) go through the R2 binding and need no creds.
  */
 
 const KEY_PREFIX = "staged/";
+/** Must match the bucket_name in wrangler.jsonc. */
+const BUCKET = "airtable-mcp-files";
+/** Presigned URL lifetime — long enough for Airtable's async ingestion. */
+const DEFAULT_TTL = 2 * 60 * 60;
 
-function base64url(bytes: ArrayBuffer): string {
-  const b = new Uint8Array(bytes);
-  let s = "";
-  for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
-  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-async function hmac(secret: string, message: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
-  return base64url(sig);
-}
-
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let out = 0;
-  for (let i = 0; i < a.length; i++) out |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return out === 0;
-}
-
-/** Generate a unique, filesystem-safe, single-segment R2 key for a filename. */
+/** Generate a unique, safe R2 key for a filename. */
 export function makeKey(filename: string): string {
   const safe = (filename || "file").replace(/[^A-Za-z0-9._-]/g, "_").slice(-120);
   return `${KEY_PREFIX}${crypto.randomUUID()}_${safe}`;
 }
 
-/** Build a signed URL for `GET /files/:key` or `PUT /upload/:key`. */
-export async function mintSignedUrl(
-  env: Env,
-  origin: string,
-  key: string,
-  method: "GET" | "PUT",
-  ttlSeconds: number,
-): Promise<string> {
-  const exp = Math.floor(Date.now() / 1000) + ttlSeconds;
-  const sig = await hmac(env.FILE_SIGNING_SECRET, `${method}:${key}:${exp}`);
-  const route = method === "PUT" ? "upload" : "files";
-  const u = new URL(`${origin}/${route}/${encodeURIComponent(key)}`);
-  u.searchParams.set("exp", String(exp));
-  u.searchParams.set("sig", sig);
-  return u.href;
+function r2Client(env: Env): AwsClient {
+  return new AwsClient({
+    accessKeyId: env.R2_ACCESS_KEY_ID,
+    secretAccessKey: env.R2_SECRET_ACCESS_KEY,
+    service: "s3",
+    region: "auto",
+  });
 }
 
-/** Verify a signed request for a given key/method. */
-export async function verifySignedUrl(
-  env: Env,
-  key: string,
-  method: "GET" | "PUT",
-  exp: string | null,
-  sig: string | null,
-): Promise<boolean> {
-  if (!exp || !sig) return false;
-  if (Number(exp) < Math.floor(Date.now() / 1000)) return false;
-  const expected = await hmac(env.FILE_SIGNING_SECRET, `${method}:${key}:${exp}`);
-  return timingSafeEqual(expected, sig);
+function objectUrl(env: Env, key: string): string {
+  return `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${BUCKET}/${key}`;
+}
+
+async function presign(env: Env, key: string, method: "GET" | "PUT", ttl: number): Promise<string> {
+  const url = new URL(objectUrl(env, key));
+  url.searchParams.set("X-Amz-Expires", String(ttl));
+  const signed = await r2Client(env).sign(new Request(url, { method }), { aws: { signQuery: true } });
+  return signed.url;
+}
+
+/** Presigned URL Airtable will GET to ingest the staged file. */
+export function presignGet(env: Env, key: string, ttl = DEFAULT_TTL): Promise<string> {
+  return presign(env, key, "GET", ttl);
+}
+
+/** Presigned URL a client PUTs raw bytes to (direct to R2, up to 5 GB). */
+export function presignPut(env: Env, key: string, ttl = DEFAULT_TTL): Promise<string> {
+  return presign(env, key, "PUT", ttl);
 }
 
 export async function putObject(
@@ -85,8 +65,8 @@ export async function putObject(
   });
 }
 
-export function getObject(env: Env, key: string): Promise<R2ObjectBody | null> {
-  return env.ATTACHMENTS_BUCKET.get(key);
+export function headObject(env: Env, key: string): Promise<R2Object | null> {
+  return env.ATTACHMENTS_BUCKET.head(key);
 }
 
 export async function deleteObject(env: Env, key: string): Promise<void> {

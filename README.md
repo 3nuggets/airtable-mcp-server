@@ -14,14 +14,14 @@ Uploading a file from your computer into an Airtable attachment field — and pu
 
 ## How document upload works
 
-Airtable ingests attachments from a **publicly reachable URL**, which it then re-hosts on its own storage. This server automates that safely:
+Airtable ingests attachments from a **publicly reachable URL**, which it then re-hosts on its own storage. This server automates that safely, supporting files up to **Airtable's 5 GB per-file limit**:
 
-1. The file is staged in a private **R2** bucket (either inline as base64, or streamed directly for large files).
-2. The server hands Airtable a **short-lived, HMAC-signed URL** on the Worker's own domain (`/files/<key>?exp=&sig=`).
+1. The file is staged in a private **R2** bucket — small files inline as base64, large files streamed straight to R2 via a **presigned PUT URL** (bytes never pass through the Worker, so there's no ~100 MB request-body ceiling).
+2. The server hands Airtable a **short-lived presigned GET URL** for the staged object.
 3. Airtable fetches and re-hosts the file.
 4. The server **polls the record** until Airtable's re-hosted copy appears, then **deletes the staged file from R2**.
 
-No R2 API tokens or public buckets are involved — serving runs entirely off the R2 binding, gated by a signing secret.
+Presigned URLs are generated with an R2 S3 API token; the bucket itself stays private.
 
 ## Architecture
 
@@ -31,7 +31,7 @@ No R2 API tokens or public buckets are involved — serving runs entirely off th
 | `@cloudflare/workers-oauth-provider` | Makes the Worker an OAuth 2.1 server for MCP clients (claude.ai does dynamic client registration) |
 | Airtable OAuth (upstream) | Each user signs in with their own Airtable account; tokens stored in KV, auto-refreshed (with rotation) |
 | R2 bucket | Temporary staging for attachment bytes |
-| Signed `/files` + `/upload` routes | Public, HMAC-gated, so Airtable/clients can GET/PUT staged files without credentials |
+| Presigned R2 URLs | Client PUTs large files straight to R2; Airtable GETs the staged file to ingest — bytes bypass the Worker |
 
 Transport: **Streamable HTTP** at `/mcp` (plus legacy `/sse`).
 
@@ -87,14 +87,19 @@ Go to **https://airtable.com/create/oauth** → *Register new OAuth integration*
 - **Scopes** (must match the server): `data.records:read`, `data.records:write`, `data.recordComments:read`, `data.recordComments:write`, `schema.bases:read`, `schema.bases:write`, `webhook:manage`, `user.email:read`.
 - Copy the **Client ID**, then generate and copy the **Client secret** (shown once).
 
-### 5. Set secrets
+### 5. Create an R2 S3 API token
+Cloudflare dashboard → **R2** → **Manage API Tokens** → **Create API Token** (Object Read & Write). Copy the **Access Key ID** and **Secret Access Key**.
+
+### 6. Set secrets
 ```bash
 npx wrangler secret put AIRTABLE_CLIENT_ID
 npx wrangler secret put AIRTABLE_CLIENT_SECRET
-npx wrangler secret put FILE_SIGNING_SECRET      # any long random string, e.g. `openssl rand -hex 32`
+npx wrangler secret put R2_ACCESS_KEY_ID
+npx wrangler secret put R2_SECRET_ACCESS_KEY
 ```
+`R2_ACCOUNT_ID` is already set as a var in `wrangler.jsonc`.
 
-### 6. Redeploy
+### 7. Redeploy
 ```bash
 npm run deploy
 ```
