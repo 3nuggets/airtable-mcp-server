@@ -1,0 +1,29 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "airtable-mcp-server",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-05-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "account_id": "2115b864ac701ed7e286669a3b3a7656",
+
+  // McpAgent runs as a SQLite-backed Durable Object.
+  "durable_objects": {
+    "bindings": [{ "class_name": "AirtableMCP", "name": "MCP_OBJECT" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AirtableMCP"] }],
+
+  // OAuth token / grant / dynamic-client storage (workers-oauth-provider).
+  // Replace "id" after: npx wrangler kv namespace create OAUTH_KV
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "98350c5525294cc4aa9a08b713ce6145" }],
+
+  // R2 bucket used to stage attachment uploads before Airtable ingests them.
+  // Create with: npx wrangler r2 bucket create airtable-mcp-files
+  "r2_buckets": [{ "binding": "ATTACHMENTS_BUCKET", "bucket_name": "airtable-mcp-files" }],
+
+  "observability": { "enabled": true }
+
+  // Secrets (set via `npx wrangler secret put <NAME>`):
+  //   AIRTABLE_CLIENT_ID       — from your Airtable OAuth integration
+  //   AIRTABLE_CLIENT_SECRET   — from your Airtable OAuth integration
+  //   FILE_SIGNING_SECRET      — random string; signs the temporary /files + /upload URLs
+}

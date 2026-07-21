@@ -1,0 +1,10 @@
+# Copy to `.dev.vars` for local `wrangler dev`. Never commit `.dev.vars`.
+# In production these are set with `npx wrangler secret put <NAME>`.
+
+# From your Airtable OAuth integration (https://airtable.com/create/oauth)
+AIRTABLE_CLIENT_ID=
+AIRTABLE_CLIENT_SECRET=
+
+# Any long random string. Signs the short-lived /files and /upload URLs.
+# Generate one with:  openssl rand -hex 32
+FILE_SIGNING_SECRET=
