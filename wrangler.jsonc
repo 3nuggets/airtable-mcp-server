@@ -6,6 +6,9 @@
   "compatibility_flags": ["nodejs_compat"],
   "account_id": "2115b864ac701ed7e286669a3b3a7656",
 
+  // Custom domain. Wrangler creates/manages the DNS record on the 3nuggets.io zone.
+  "routes": [{ "pattern": "airtable-mcp.3nuggets.io", "custom_domain": true }],
+
   // McpAgent runs as a SQLite-backed Durable Object.
   "durable_objects": {
     "bindings": [{ "class_name": "AirtableMCP", "name": "MCP_OBJECT" }]

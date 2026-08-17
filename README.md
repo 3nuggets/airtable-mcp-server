@@ -80,6 +80,12 @@ npm run deploy
 ```
 Note the URL, e.g. `https://airtable-mcp-server.<your-subdomain>.workers.dev`.
 
+**Optional — custom domain.** If the domain is on your Cloudflare account, add a route to `wrangler.jsonc` and Wrangler will create the DNS record and certificate for you:
+```jsonc
+"routes": [{ "pattern": "airtable-mcp.example.com", "custom_domain": true }]
+```
+Note that defining `routes` disables the `*.workers.dev` URL unless you also set `"workers_dev": true`. Use whichever hostname you settle on consistently — it must match the OAuth redirect URL in the next step.
+
 ### 4. Register an Airtable OAuth integration
 Go to **https://airtable.com/create/oauth** → *Register new OAuth integration*.
 - **Name:** anything (e.g. "My Airtable MCP").
