@@ -1,39 +1,37 @@
 # Airtable MCP Server
 
-A remote [Model Context Protocol](https://modelcontextprotocol.io) server that exposes the **full Airtable Web API** to Claude — including **document (attachment) upload and download**, which the official Airtable connector does not support.
+A remote [Model Context Protocol](https://modelcontextprotocol.io) server that exposes the **full Airtable Web API** to Claude — including **document upload and download**, which the official Airtable connector does not support.
 
-It runs on **Cloudflare Workers**, authenticates each user with **their own Airtable account** via OAuth 2.1 (PKCE-S256), and stages file uploads through **Cloudflare R2** so files of any size can be attached to Airtable and then removed from Cloudflare automatically.
+It runs on **Cloudflare Workers**, and every user signs in with **their own Airtable account** via OAuth 2.1 (PKCE-S256). One URL, their own login, done — nobody needs access to your Cloudflare account.
 
 Works as a **claude.ai custom connector**, in **Claude Desktop**, and in **Claude Code**.
 
 ---
 
-## Why this exists
+## It stores nothing
 
-Uploading a file from your computer into an Airtable attachment field — and pulling files back out — without you having to think about hosting, URLs, or cleanup. You point Claude at a record; Claude uploads the document; the server handles staging, ingestion, and teardown.
+This server is an execution proxy, not a database. It runs tasks and keeps no record of them.
 
-## How document upload works
+- **No storage bindings at all** — no KV, no R2, no Durable Objects, no database. Check [wrangler.jsonc](wrangler.jsonc): there is nothing to store into.
+- **No credentials at rest.** There is no server-side session or grant table. Every token this server issues is a *sealed* blob (AES-GCM) that the client holds; it carries the user's Airtable credentials inside itself. A request arrives carrying its own authorization, we decrypt it in memory, call Airtable, and discard it.
+- **No user data.** Records stream straight through to the Airtable API. Nothing is cached or logged.
+- **No documents.** Uploaded bytes are passed directly to Airtable's upload endpoint and dropped; downloads return Airtable's own temporary URL.
+- **No session state.** Each HTTP request builds an MCP server instance, answers one message, and throws it away.
 
-Airtable ingests attachments from a **publicly reachable URL**, which it then re-hosts on its own storage. This server automates that safely, supporting files up to **Airtable's 5 GB per-file limit**:
+The only persistent value is `TOKEN_SEALING_KEY` — a server secret, not user data. Rotating it invalidates every issued token at once.
 
-1. The file is staged in a private **R2** bucket — small files inline as base64, large files streamed straight to R2 via a **presigned PUT URL** (bytes never pass through the Worker, so there's no ~100 MB request-body ceiling).
-2. The server hands Airtable a **short-lived presigned GET URL** for the staged object.
-3. Airtable fetches and re-hosts the file.
-4. The server **polls the record** until Airtable's re-hosted copy appears, then **deletes the staged file from R2**.
-
-Presigned URLs are generated with an R2 S3 API token; the bucket itself stays private.
+**Consequence to be aware of:** because there are no grant records, there is no server-side "revoke this user" button. Revocation lives where it belongs — a user removes the integration in **their own Airtable account settings** — and rotating the sealing key logs everyone out.
 
 ## Architecture
 
 | Piece | What it does |
 |---|---|
-| `McpAgent` (Durable Object) | Hosts the MCP server + tools, one instance per user session |
-| `@cloudflare/workers-oauth-provider` | Makes the Worker an OAuth 2.1 server for MCP clients (claude.ai does dynamic client registration) |
-| Airtable OAuth (upstream) | Each user signs in with their own Airtable account; tokens stored in KV, auto-refreshed (with rotation) |
-| R2 bucket | Temporary staging for attachment bytes |
-| Presigned R2 URLs | Client PUTs large files straight to R2; Airtable GETs the staged file to ingest — bytes bypass the Worker |
+| Stateless OAuth 2.1 AS ([oauth.ts](src/oauth.ts)) | Dynamic client registration, authorize, callback, token — all state sealed into the client's own credentials |
+| Sealed tokens ([crypto.ts](src/crypto.ts)) | AES-GCM envelopes bound to a purpose and an expiry, so a token of one kind can't be replayed as another |
+| Airtable OAuth (upstream) | Each user authorizes their own account; rotated refresh tokens are re-sealed back to the client |
+| Request-scoped transport ([transport.ts](src/transport.ts)) | A Workers-native MCP transport — no sessions, no Durable Objects |
 
-Transport: **Streamable HTTP** at `/mcp` (plus legacy `/sse`).
+Transport: **Streamable HTTP** at `/mcp`, answering with `application/json`.
 
 ---
 
@@ -47,65 +45,53 @@ Transport: **Streamable HTTP** at `/mcp` (plus legacy `/sse`).
 
 **Webhooks** — `create_webhook`, `list_webhooks`, `delete_webhook`, `list_webhook_payloads`, `refresh_webhook`, `manage_webhook_notifications`
 
-**Attachments** — `upload_attachment`, `create_attachment_upload_url`, `download_attachment`
+**Attachments** — `upload_attachment`, `download_attachment`
 
 **User** — `whoami`
 
-The server ships a detailed `instructions` block so Claude picks the right tool and follows the correct sequence (resolve IDs → read/write; stage → attach → cleanup) with minimal prompting.
+The server ships a detailed `instructions` block so Claude picks the right tool and follows the correct sequence (resolve IDs → read/write) with minimal prompting.
+
+### File size limit
+
+Airtable's API accepts at most **5 MB** of file bytes per upload. Larger files can only be added through the Airtable UI. Airtable's alternative — having Airtable fetch a public URL — is deliberately **not** used here, because it would require staging the file in storage, which this server does not do.
 
 ---
 
 ## Setup & deploy
 
 ### Prerequisites
-- Node.js 18+ and the Cloudflare **Wrangler** CLI (`npm i -g wrangler` or use `npx`), logged in (`wrangler login`).
-- **R2 enabled** on your Cloudflare account (Dashboard → R2 → enable). Required before deploy.
+- Node.js 18+ and the Cloudflare **Wrangler** CLI, logged in (`wrangler login`).
 - An **Airtable account**.
 
-### 1. Install
+### 1. Install and deploy
 ```bash
 npm install
-npm run cf-typegen   # generates worker-configuration.d.ts
-```
-
-### 2. Create resources
-```bash
-npx wrangler kv namespace create airtable-mcp-server-OAUTH_KV   # put the id in wrangler.jsonc
-npx wrangler r2 bucket create airtable-mcp-files
-```
-
-### 3. First deploy (to get your Worker URL)
-```bash
 npm run deploy
 ```
 Note the URL, e.g. `https://airtable-mcp-server.<your-subdomain>.workers.dev`.
 
-**Optional — custom domain.** If the domain is on your Cloudflare account, add a route to `wrangler.jsonc` and Wrangler will create the DNS record and certificate for you:
+**Optional — custom domain.** If the domain is on your Cloudflare account, add a route to `wrangler.jsonc` and Wrangler creates the DNS record and certificate:
 ```jsonc
 "routes": [{ "pattern": "airtable-mcp.example.com", "custom_domain": true }]
 ```
-Note that defining `routes` disables the `*.workers.dev` URL unless you also set `"workers_dev": true`. Use whichever hostname you settle on consistently — it must match the OAuth redirect URL in the next step.
+Defining `routes` disables the `*.workers.dev` URL unless you also set `"workers_dev": true`. Whichever hostname you settle on must match the OAuth redirect URL below.
 
-### 4. Register an Airtable OAuth integration
+### 2. Register an Airtable OAuth integration
 Go to **https://airtable.com/create/oauth** → *Register new OAuth integration*.
-- **Name:** anything (e.g. "My Airtable MCP").
-- **OAuth redirect URL:** `https://airtable-mcp-server.<your-subdomain>.workers.dev/callback`
-- **Scopes** (must match the server): `data.records:read`, `data.records:write`, `data.recordComments:read`, `data.recordComments:write`, `schema.bases:read`, `schema.bases:write`, `webhook:manage`, `user.email:read`.
+- **OAuth redirect URL:** `https://<your-worker-host>/callback`
+- **Scopes:** `data.records:read`, `data.records:write`, `data.recordComments:read`, `data.recordComments:write`, `schema.bases:read`, `schema.bases:write`, `webhook:manage`, `user.email:read`
 - Copy the **Client ID**, then generate and copy the **Client secret** (shown once).
 
-### 5. Create an R2 S3 API token
-Cloudflare dashboard → **R2** → **Manage API Tokens** → **Create API Token** (Object Read & Write). Copy the **Access Key ID** and **Secret Access Key**.
+To let people other than yourself authorize it, Airtable also requires a **Privacy policy URL** and **Terms of service URL** on the integration.
 
-### 6. Set secrets
+### 3. Set secrets
 ```bash
 npx wrangler secret put AIRTABLE_CLIENT_ID
 npx wrangler secret put AIRTABLE_CLIENT_SECRET
-npx wrangler secret put R2_ACCESS_KEY_ID
-npx wrangler secret put R2_SECRET_ACCESS_KEY
+npx wrangler secret put TOKEN_SEALING_KEY   # long random string, e.g. `openssl rand -hex 32`
 ```
-`R2_ACCOUNT_ID` is already set as a var in `wrangler.jsonc`.
 
-### 7. Redeploy
+### 4. Redeploy
 ```bash
 npm run deploy
 ```
@@ -114,37 +100,11 @@ npm run deploy
 
 ## Connecting
 
-- **claude.ai** → Settings → Connectors → *Add custom connector* → paste `https://<your-worker>/mcp`. Sign in with Airtable when prompted.
-- **Claude Desktop** → Settings → Connectors → add the same `/mcp` URL.
-- **Claude Code** → `claude mcp add --transport http airtable https://<your-worker>/mcp`
+- **claude.ai** → Settings → Connectors → *Add custom connector* → paste `https://<your-worker-host>/mcp`
+- **Claude Desktop** → Settings → Connectors → same URL
+- **Claude Code** → `claude mcp add --transport http airtable https://<your-worker-host>/mcp`
 
-> **Large files:** truly unlimited uploads work best from **Claude Code**, which can stream bytes to the signed upload URL. From claude.ai/Desktop, files pass through the conversation and are bounded by context size.
-
-## Sharing it with other people
-
-The server is **multi-tenant by design**. Anyone you give the URL to can connect it and sign in with **their own Airtable account** — they never need access to your Cloudflare account, and they never see anyone else's data:
-
-- Each user completes their own Airtable OAuth login through your Worker.
-- Every tool call acts strictly as the calling user, with the scopes *they* consented to.
-
-### What the server stores (deliberately minimal)
-
-The operator should not be sitting on a pile of other people's credentials, so the server keeps as little as the protocol allows:
-
-- **Airtable tokens are never written to our own storage.** They exist only inside the OAuth provider's `props`, which are **encrypted into each user's access token** — they cannot be read at rest without that user's token. Rotated tokens are re-issued through `tokenExchangeCallback` rather than saved by us.
-- **No personal data on the grant.** `metadata` is stored *unencrypted*, so it is left empty — no emails, no names. The grant record holds an opaque Airtable user ID.
-- **No record data is ever persisted.** Reads and writes stream straight through to the Airtable API.
-- **Files are transient.** Uploads are staged in R2 only long enough for Airtable to fetch them, deleted immediately after, with a 1-day lifecycle rule as a backstop.
-
-**What cannot be removed:** any remote OAuth server must keep a grant record per connected user (an opaque user ID, hashed tokens, and the encrypted props blob) — that is how it authenticates their requests at all. Grants can be revoked, and expired ones purged. If you want *literally* zero per-user storage, the only way is for each person to deploy their own copy of this Worker — which is the tradeoff you accept in exchange for them not needing a Cloudflare account.
-
-To let people other than yourself authorize it, Airtable requires you to fill in a **Privacy policy URL** and a **Terms of service URL** on the integration at `airtable.com/create/oauth` — these are mandatory before an integration can be shared with other users, and they're shown on the consent screen. Adding a support email, logo, and tagline is optional but makes the consent screen look legitimate.
-
-**Things to know before opening it up:**
-
-- **You pay for the infrastructure.** Worker requests, Durable Object usage, and R2 storage/egress all bill to *your* Cloudflare account, and scale with how much other people use it. Airtable API usage is charged against each user's own account and rate limits, not yours.
-- **Staged files auto-expire.** An R2 lifecycle rule deletes anything left under `staged/` after 1 day, so uploads that fail mid-ingestion can't accumulate. The happy path still deletes immediately after Airtable re-hosts the file.
-- **There are no per-user quotas.** Any authenticated user can stage files up to Airtable's 5 GB limit. Add rate limiting before promoting it widely.
+Then sign in with Airtable when prompted.
 
 ## Local development
 ```bash

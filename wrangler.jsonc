@@ -9,30 +9,18 @@
   // Custom domain. Wrangler creates/manages the DNS record on the 3nuggets.io zone.
   "routes": [{ "pattern": "airtable-mcp.3nuggets.io", "custom_domain": true }],
 
-  // McpAgent runs as a SQLite-backed Durable Object.
-  "durable_objects": {
-    "bindings": [{ "class_name": "AirtableMCP", "name": "MCP_OBJECT" }]
-  },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AirtableMCP"] }],
+  // NOTE: there are deliberately NO storage bindings (no KV, R2 or Durable Objects).
+  // This server is a stateless proxy: it holds no credentials, user data or files.
+  // v2 drops the former McpAgent Durable Object, deleting any state it had stored.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["AirtableMCP"] },
+    { "tag": "v2", "deleted_classes": ["AirtableMCP"] }
+  ],
 
-  // OAuth token / grant / dynamic-client storage (workers-oauth-provider).
-  // Replace "id" after: npx wrangler kv namespace create OAUTH_KV
-  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "98350c5525294cc4aa9a08b713ce6145" }],
-
-  // R2 bucket used to stage attachment uploads before Airtable ingests them.
-  // Create with: npx wrangler r2 bucket create airtable-mcp-files
-  "r2_buckets": [{ "binding": "ATTACHMENTS_BUCKET", "bucket_name": "airtable-mcp-files" }],
-
-  "observability": { "enabled": true },
-
-  // Non-secret vars. R2_ACCOUNT_ID is your Cloudflare account ID (used in the R2 S3 host).
-  "vars": {
-    "R2_ACCOUNT_ID": "2115b864ac701ed7e286669a3b3a7656"
-  }
+  "observability": { "enabled": true }
 
   // Secrets (set via `npx wrangler secret put <NAME>`):
   //   AIRTABLE_CLIENT_ID       — from your Airtable OAuth integration
   //   AIRTABLE_CLIENT_SECRET   — from your Airtable OAuth integration
-  //   R2_ACCESS_KEY_ID         — R2 S3 API token (R2 → Manage API Tokens)
-  //   R2_SECRET_ACCESS_KEY     — R2 S3 API token secret
+  //   TOKEN_SEALING_KEY        — long random string; seals the stateless tokens
 }

@@ -1,85 +1,117 @@
-import OAuthProvider, { GrantType, OAuthError } from "@cloudflare/workers-oauth-provider";
-import { AirtableMCP } from "./mcp";
-import { AirtableHandler } from "./handler";
-import { refreshAirtableTokens } from "./tokens";
-import type { Env, Props } from "./types";
-
-export { AirtableMCP };
+import type { Env } from "./types";
+import {
+  CORS,
+  authenticate,
+  authorizationServerMetadata,
+  handleAuthorize,
+  handleCallback,
+  handleRegister,
+  handleToken,
+  protectedResourceMetadata,
+  unauthorized,
+} from "./oauth";
+import { buildServer } from "./mcp";
+import { runMessages } from "./transport";
 
 /**
- * Our access tokens are deliberately shorter-lived than Airtable's (60 min), so a
- * client refresh — and with it the upstream Airtable refresh below — always
- * happens while the Airtable token is still valid.
+ * Airtable MCP server — a stateless execution proxy.
+ *
+ * There are no storage bindings. Each request carries its own sealed credentials,
+ * is executed against Airtable, and leaves nothing behind: no tokens, no user data,
+ * no documents, no session state.
  */
-const ACCESS_TOKEN_TTL = 45 * 60;
-
-/**
- * `tokenExchangeCallback` does not receive `env`, so the outer fetch handler
- * stashes it here before delegating to the provider.
- */
-let currentEnv: Env | null = null;
-
-const provider = new OAuthProvider({
-  apiHandlers: {
-    "/mcp": AirtableMCP.serve("/mcp"),
-    "/sse": AirtableMCP.serveSSE("/sse"),
-  },
-  // Everything that isn't an MCP endpoint (OAuth pages, health).
-  defaultHandler: AirtableHandler as any,
-  authorizeEndpoint: "/authorize",
-  tokenEndpoint: "/token",
-  clientRegistrationEndpoint: "/register",
-  // OAuth 2.1 hardening: require PKCE S256, no plain challenge, no implicit flow.
-  allowImplicitFlow: false,
-  allowPlainPKCE: false,
-  accessTokenTTL: ACCESS_TOKEN_TTL,
-
-  /**
-   * Refresh the user's Airtable tokens whenever their MCP client refreshes with us,
-   * and persist the rotated pair back into the encrypted grant props. This is what
-   * lets us hold no Airtable credentials in our own storage: props are the only
-   * copy, and they are re-issued here rather than written to KV by us.
-   */
-  async tokenExchangeCallback({ grantType, props }) {
-    if (grantType !== GrantType.REFRESH_TOKEN) return;
-
-    const p = props as Props;
-    if (!p?.airtableRefreshToken) return;
-
-    // Still comfortably valid — reuse it rather than burning a rotation.
-    if (Date.now() < p.expiresAt - 5 * 60_000) return;
-
-    const env = currentEnv;
-    if (!env) return;
-
-    try {
-      const t = await refreshAirtableTokens(
-        env.AIRTABLE_CLIENT_ID,
-        env.AIRTABLE_CLIENT_SECRET,
-        p.airtableRefreshToken,
-      );
-      const newProps: Props = {
-        ...p,
-        airtableAccessToken: t.accessToken,
-        airtableRefreshToken: t.refreshToken,
-        expiresAt: t.expiresAt,
-        scope: t.scope,
-      };
-      return { newProps, accessTokenTTL: ACCESS_TOKEN_TTL };
-    } catch {
-      // Airtable refresh tokens die after 60 days of inactivity. Tell the client to
-      // re-authorize rather than handing back a grant that can never work again.
-      throw new OAuthError("invalid_grant", {
-        description:
-          "Your Airtable authorization has expired. Please reconnect the Airtable connector.",
-      });
-    }
-  },
-});
-
 export default {
-  fetch(request: Request, env: Env, ctx: ExecutionContext) {
-    currentEnv = env;
-    return provider.fetch(request, env as any, ctx);
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+    const origin = url.origin;
+
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: CORS });
+    }
+
+    switch (url.pathname) {
+      case "/":
+        return new Response(
+          "Airtable MCP server. Connect an MCP client to /mcp and sign in with your Airtable account.\n" +
+            "This server stores nothing: no credentials, no records, no documents.\n",
+          { status: 200, headers: { "Content-Type": "text/plain", ...CORS } },
+        );
+
+      case "/health":
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { "Content-Type": "application/json", ...CORS },
+        });
+
+      case "/.well-known/oauth-authorization-server":
+        return authorizationServerMetadata(origin);
+
+      case "/.well-known/oauth-protected-resource":
+      case "/.well-known/oauth-protected-resource/mcp":
+        return protectedResourceMetadata(origin);
+
+      case "/register":
+        if (request.method !== "POST") return methodNotAllowed();
+        return handleRegister(request, env);
+
+      case "/authorize":
+        return handleAuthorize(request, env);
+
+      case "/callback":
+        return handleCallback(request, env);
+
+      case "/token":
+        if (request.method !== "POST") return methodNotAllowed();
+        return handleToken(request, env);
+
+      case "/mcp":
+        return handleMcp(request, env, origin);
+    }
+
+    return new Response("Not found", { status: 404, headers: CORS });
   },
 };
+
+function methodNotAllowed(): Response {
+  return new Response("Method not allowed", { status: 405, headers: CORS });
+}
+
+async function handleMcp(request: Request, env: Env, origin: string): Promise<Response> {
+  // No sessions to resume or tear down, so only POST carries meaning.
+  if (request.method === "GET" || request.method === "DELETE") {
+    return new Response(null, { status: 405, headers: CORS });
+  }
+  if (request.method !== "POST") return methodNotAllowed();
+
+  const props = await authenticate(request, env);
+  if (!props) return unauthorized(origin);
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonRpcError(null, -32700, "Parse error");
+  }
+
+  const messages = Array.isArray(body) ? body : [body];
+  const server = buildServer(env, props);
+
+  try {
+    const replies = await runMessages(server, messages);
+    // Notifications only — nothing to return.
+    if (replies.length === 0) return new Response(null, { status: 202, headers: CORS });
+    const payload = Array.isArray(body) ? replies : replies[0];
+    return new Response(JSON.stringify(payload), {
+      headers: { "Content-Type": "application/json", ...CORS },
+    });
+  } catch (e) {
+    const id = (messages[0] as any)?.id ?? null;
+    return jsonRpcError(id, -32603, e instanceof Error ? e.message : "Internal error");
+  }
+}
+
+function jsonRpcError(id: unknown, code: number, message: string): Response {
+  return new Response(JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } }), {
+    status: 200,
+    headers: { "Content-Type": "application/json", ...CORS },
+  });
+}

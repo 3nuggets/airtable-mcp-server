@@ -11,11 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@cloudflare/workers-oauth-provider": "^0.8.2",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "agents": "^0.17.4",
-    "aws4fetch": "^1.0.20",
-    "hono": "^4.12.31",
     "zod": "^4.4.3"
   },
   "devDependencies": {

@@ -5,10 +5,7 @@
 AIRTABLE_CLIENT_ID=
 AIRTABLE_CLIENT_SECRET=
 
-# R2 S3 API token (Cloudflare dashboard → R2 → Manage API Tokens → Create API Token).
-# Used to presign upload/download URLs for staging attachments.
-R2_ACCESS_KEY_ID=
-R2_SECRET_ACCESS_KEY=
-
-# Your Cloudflare account ID (also set as a var in wrangler.jsonc for production).
-R2_ACCOUNT_ID=2115b864ac701ed7e286669a3b3a7656
+# Seals the stateless tokens this server issues. Any long random string.
+# Generate one with:  openssl rand -hex 32
+# Rotating this invalidates every issued token (i.e. logs everyone out).
+TOKEN_SEALING_KEY=

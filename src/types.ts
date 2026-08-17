@@ -1,33 +1,23 @@
-import type { OAuthHelpers } from "@cloudflare/workers-oauth-provider";
-
 /**
- * Worker bindings + secrets. Binding types (MCP_OBJECT, OAUTH_KV, ATTACHMENTS_BUCKET)
- * come from the generated `Cloudflare.Env` (see worker-configuration.d.ts, produced by
- * `npm run cf-typegen`). Secrets and the OAuthProvider-injected helper are added here.
+ * Worker environment. Note there are NO storage bindings: no KV, no R2, no Durable
+ * Objects. This server keeps nothing — it only needs the credentials required to
+ * talk to Airtable and the key used to seal stateless tokens.
  */
-export interface Env extends Cloudflare.Env {
-  /** Injected into the default handler's env by OAuthProvider. */
-  OAUTH_PROVIDER: OAuthHelpers;
-
-  // Secrets (set via `wrangler secret put`)
+export interface Env {
+  /** From your Airtable OAuth integration. */
   AIRTABLE_CLIENT_ID: string;
   AIRTABLE_CLIENT_SECRET: string;
-  /** R2 S3 API token, used to presign upload/download URLs for staging attachments. */
-  R2_ACCESS_KEY_ID: string;
-  R2_SECRET_ACCESS_KEY: string;
-  // R2_ACCOUNT_ID comes from Cloudflare.Env (wrangler.jsonc vars).
+  /** Seals every stateless token this server issues. Rotating it logs everyone out. */
+  TOKEN_SEALING_KEY: string;
 }
 
 /**
- * Per-user context attached to the MCP grant, available as `this.props` in the
- * McpAgent. This is the ONLY place a user's Airtable tokens live: the OAuth
- * provider encrypts props into that user's access token, so they cannot be read
- * at rest without the token itself. We never copy them into our own storage.
+ * The caller's identity for a single request, decrypted from their bearer token.
+ * It exists only for the lifetime of that request and is never written anywhere.
  */
-export interface Props extends Record<string, unknown> {
+export interface Props {
   userId: string;
   airtableAccessToken: string;
-  airtableRefreshToken: string;
   /** Epoch ms at which the Airtable access token expires. */
   expiresAt: number;
   scope: string;
@@ -43,7 +33,7 @@ export interface AirtableTokenResponse {
   refresh_expires_in: number;
 }
 
-/** An Airtable token pair, carried in encrypted `props` (never stored by us). */
+/** An Airtable token pair, held only in-flight. */
 export interface StoredTokens {
   accessToken: string;
   refreshToken: string;

@@ -1,11 +1,10 @@
-import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Env, Props } from "./types";
 import { AirtableClient } from "./airtable";
 import { registerAllTools } from "./tools";
 
 const INSTRUCTIONS = [
-  "This server exposes the full Airtable Web API for the authenticated user, plus first-class document (attachment) upload and download. Every call acts as the signed-in Airtable account.",
+  "This server exposes the full Airtable Web API for the authenticated user, plus document (attachment) upload and download. Every call acts as the signed-in Airtable account.",
   "",
   "RESOLVE IDS FIRST: call list_bases to turn a base name into its ID, then get_base_schema(baseId) for table IDs, field IDs, field types, and views. Operate on IDs, not names; pass returnFieldsByFieldId:true for rename-stable reads.",
   "",
@@ -13,42 +12,30 @@ const INSTRUCTIONS = [
   "",
   "WRITE records with create_records, update_records (PATCH — preserves unsent fields), replace_records (PUT — clears unsent fields), or delete_records. All auto-batch in groups of 10. To upsert, call update_records with performUpsert.fieldsToMergeOn.",
   "",
-  "UPLOAD A DOCUMENT TO AIRTABLE (the main purpose of this server): use upload_attachment on an existing record's attachment field. Pass small/medium files inline as base64 `content`. For large files (or from Claude Code), call create_attachment_upload_url, PUT the raw bytes to the returned uploadUrl, then call upload_attachment with the returned uploadKey. The server stages the file on Cloudflare, gives Airtable a temporary URL, waits for Airtable to re-host it, then deletes the staged copy — you never manage storage. Create the record first if it does not exist.",
+  "UPLOAD A DOCUMENT TO AIRTABLE (a main purpose of this server): use upload_attachment on an existing record's attachment field, passing the file bytes as base64 `content`. The bytes stream straight through to Airtable and are never stored anywhere by this server. Airtable's direct upload limit is 5 MB per file — for anything larger, tell the user it exceeds the limit rather than retrying. Create the record first if it does not exist.",
   "",
   "DOWNLOAD A DOCUMENT FROM AIRTABLE: use download_attachment to get a fresh temporary URL (valid ~2h) plus metadata; in Claude Code, fetch that URL to save the file locally. Set inline:true to also receive base64 bytes for small files. Attachment URLs from list_records/get_record expire after ~2h — always fetch a fresh one.",
   "",
   "Also available: record comments, base/table/field schema management, and webhooks. Rate limits (5 req/sec/base) are retried automatically. ID prefixes: base app…, table tbl…, field fld…, record rec…, view viw…, comment com…, attachment att…, webhook ach…, workspace wsp….",
 ].join("\n");
 
-export class AirtableMCP extends McpAgent<Env, unknown, Props> {
-  server = new McpServer(
-    { name: "airtable-mcp-server", version: "1.0.0" },
+/**
+ * Build a server instance for a single request, bound to that caller's Airtable
+ * credentials. Nothing is shared between requests or retained after one.
+ */
+export function buildServer(env: Env, props: Props): McpServer {
+  const server = new McpServer(
+    { name: "airtable-mcp-server", version: "2.0.0" },
     { instructions: INSTRUCTIONS },
   );
 
-  async init(): Promise<void> {
-    const env = this.env;
-    if (!this.props?.userId) {
-      throw new Error("Missing authentication context. Please reconnect the Airtable connector.");
+  const client = new AirtableClient(async () => {
+    if (Date.now() >= props.expiresAt) {
+      throw new Error("Airtable access token expired. Your client should refresh and retry.");
     }
+    return props.airtableAccessToken;
+  });
 
-    // Read props at call time, not capture time: the OAuth layer re-issues them
-    // with rotated Airtable tokens on refresh (see tokenExchangeCallback).
-    const client = new AirtableClient(async () => {
-      const p = this.props;
-      if (!p?.airtableAccessToken) {
-        throw new Error("Missing Airtable credentials. Reconnect the Airtable connector.");
-      }
-      if (Date.now() >= p.expiresAt) {
-        // We deliberately do not refresh here — a rotation we cannot persist would
-        // invalidate the stored refresh token and silently break the grant.
-        throw new Error(
-          "Your Airtable access token has expired. Reconnect the Airtable connector to continue.",
-        );
-      }
-      return p.airtableAccessToken;
-    });
-
-    registerAllTools(this.server, { env, userId: this.props.userId, client });
-  }
+  registerAllTools(server, { env, userId: props.userId, client });
+  return server;
 }
