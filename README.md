@@ -125,8 +125,18 @@ npm run deploy
 The server is **multi-tenant by design**. Anyone you give the URL to can connect it and sign in with **their own Airtable account** — they never need access to your Cloudflare account, and they never see anyone else's data:
 
 - Each user completes their own Airtable OAuth login through your Worker.
-- Their Airtable tokens are stored (and refreshed) under `airtable_tokens:<their-airtable-user-id>`, isolated per user.
 - Every tool call acts strictly as the calling user, with the scopes *they* consented to.
+
+### What the server stores (deliberately minimal)
+
+The operator should not be sitting on a pile of other people's credentials, so the server keeps as little as the protocol allows:
+
+- **Airtable tokens are never written to our own storage.** They exist only inside the OAuth provider's `props`, which are **encrypted into each user's access token** — they cannot be read at rest without that user's token. Rotated tokens are re-issued through `tokenExchangeCallback` rather than saved by us.
+- **No personal data on the grant.** `metadata` is stored *unencrypted*, so it is left empty — no emails, no names. The grant record holds an opaque Airtable user ID.
+- **No record data is ever persisted.** Reads and writes stream straight through to the Airtable API.
+- **Files are transient.** Uploads are staged in R2 only long enough for Airtable to fetch them, deleted immediately after, with a 1-day lifecycle rule as a backstop.
+
+**What cannot be removed:** any remote OAuth server must keep a grant record per connected user (an opaque user ID, hashed tokens, and the encrypted props blob) — that is how it authenticates their requests at all. Grants can be revoked, and expired ones purged. If you want *literally* zero per-user storage, the only way is for each person to deploy their own copy of this Worker — which is the tradeoff you accept in exchange for them not needing a Cloudflare account.
 
 To let people other than yourself authorize it, Airtable requires you to fill in a **Privacy policy URL** and a **Terms of service URL** on the integration at `airtable.com/create/oauth` — these are mandatory before an integration can be shared with other users, and they're shown on the consent screen. Adding a support email, logo, and tagline is optional but makes the consent screen look legitimate.
 

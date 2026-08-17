@@ -1,8 +1,7 @@
 import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { Env, Props, StoredTokens } from "./types";
+import type { Env, Props } from "./types";
 import { AirtableClient } from "./airtable";
-import { getValidAccessToken } from "./tokens";
 import { registerAllTools } from "./tools";
 
 const INSTRUCTIONS = [
@@ -29,17 +28,27 @@ export class AirtableMCP extends McpAgent<Env, unknown, Props> {
 
   async init(): Promise<void> {
     const env = this.env;
-    const props = this.props;
-    if (!props?.userId) {
+    if (!this.props?.userId) {
       throw new Error("Missing authentication context. Please reconnect the Airtable connector.");
     }
-    const fallback: StoredTokens = {
-      accessToken: props.airtableAccessToken,
-      refreshToken: props.airtableRefreshToken,
-      expiresAt: props.expiresAt,
-      scope: props.scope,
-    };
-    const client = new AirtableClient(() => getValidAccessToken(env, props.userId, fallback));
-    registerAllTools(this.server, { env, userId: props.userId, client });
+
+    // Read props at call time, not capture time: the OAuth layer re-issues them
+    // with rotated Airtable tokens on refresh (see tokenExchangeCallback).
+    const client = new AirtableClient(async () => {
+      const p = this.props;
+      if (!p?.airtableAccessToken) {
+        throw new Error("Missing Airtable credentials. Reconnect the Airtable connector.");
+      }
+      if (Date.now() >= p.expiresAt) {
+        // We deliberately do not refresh here — a rotation we cannot persist would
+        // invalidate the stored refresh token and silently break the grant.
+        throw new Error(
+          "Your Airtable access token has expired. Reconnect the Airtable connector to continue.",
+        );
+      }
+      return p.airtableAccessToken;
+    });
+
+    registerAllTools(this.server, { env, userId: this.props.userId, client });
   }
 }

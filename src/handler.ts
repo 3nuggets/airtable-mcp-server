@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { AuthRequest, OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import type { Env, AirtableTokenResponse } from "./types";
-import { saveTokens, tokensFromResponse } from "./tokens";
+import { tokensFromResponse } from "./tokens";
 
 /**
  * OAuth scopes requested from Airtable. These MUST also be enabled on your
@@ -115,19 +115,21 @@ app.get("/callback", async (c) => {
 
   const who = (await fetch(WHOAMI_URL, {
     headers: { Authorization: `Bearer ${tokenJson.access_token}` },
-  }).then((r) => r.json())) as { id: string; email?: string };
+  }).then((r) => r.json())) as { id: string };
 
   const tokens = tokensFromResponse(tokenJson);
-  await saveTokens(c.env, who.id, tokens);
 
+  // Nothing is written to our own storage here. The Airtable tokens go only into
+  // `props`, which the OAuth provider encrypts into this user's access token.
+  // `metadata` is deliberately omitted — it is stored UNENCRYPTED on the grant.
   const { redirectTo } = await c.env.OAUTH_PROVIDER.completeAuthorization({
     request: oauthReqInfo,
     userId: who.id,
     scope: oauthReqInfo.scope,
-    metadata: { label: who.email ?? who.id },
+    // Required by the API, but kept empty on purpose: metadata is NOT encrypted.
+    metadata: {},
     props: {
       userId: who.id,
-      email: who.email ?? "",
       airtableAccessToken: tokens.accessToken,
       airtableRefreshToken: tokens.refreshToken,
       expiresAt: tokens.expiresAt,

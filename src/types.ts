@@ -19,16 +19,16 @@ export interface Env extends Cloudflare.Env {
 }
 
 /**
- * Per-user context attached to the MCP grant. Available as `this.props` inside
- * the McpAgent. Airtable tokens live in OAUTH_KV (see tokens.ts) keyed by userId;
- * we also carry them here as the initial value written at login.
+ * Per-user context attached to the MCP grant, available as `this.props` in the
+ * McpAgent. This is the ONLY place a user's Airtable tokens live: the OAuth
+ * provider encrypts props into that user's access token, so they cannot be read
+ * at rest without the token itself. We never copy them into our own storage.
  */
 export interface Props extends Record<string, unknown> {
   userId: string;
-  email: string;
   airtableAccessToken: string;
   airtableRefreshToken: string;
-  /** Epoch ms at which the access token expires. */
+  /** Epoch ms at which the Airtable access token expires. */
   expiresAt: number;
   scope: string;
 }
@@ -43,7 +43,7 @@ export interface AirtableTokenResponse {
   refresh_expires_in: number;
 }
 
-/** Persisted Airtable token record (OAUTH_KV: `airtable_tokens:<userId>`). */
+/** An Airtable token pair, carried in encrypted `props` (never stored by us). */
 export interface StoredTokens {
   accessToken: string;
   refreshToken: string;
