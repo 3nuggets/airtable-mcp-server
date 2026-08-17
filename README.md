@@ -120,6 +120,22 @@ npm run deploy
 
 > **Large files:** truly unlimited uploads work best from **Claude Code**, which can stream bytes to the signed upload URL. From claude.ai/Desktop, files pass through the conversation and are bounded by context size.
 
+## Sharing it with other people
+
+The server is **multi-tenant by design**. Anyone you give the URL to can connect it and sign in with **their own Airtable account** — they never need access to your Cloudflare account, and they never see anyone else's data:
+
+- Each user completes their own Airtable OAuth login through your Worker.
+- Their Airtable tokens are stored (and refreshed) under `airtable_tokens:<their-airtable-user-id>`, isolated per user.
+- Every tool call acts strictly as the calling user, with the scopes *they* consented to.
+
+To let people other than yourself authorize it, Airtable requires you to fill in a **Privacy policy URL** and a **Terms of service URL** on the integration at `airtable.com/create/oauth` — these are mandatory before an integration can be shared with other users, and they're shown on the consent screen. Adding a support email, logo, and tagline is optional but makes the consent screen look legitimate.
+
+**Things to know before opening it up:**
+
+- **You pay for the infrastructure.** Worker requests, Durable Object usage, and R2 storage/egress all bill to *your* Cloudflare account, and scale with how much other people use it. Airtable API usage is charged against each user's own account and rate limits, not yours.
+- **Staged files auto-expire.** An R2 lifecycle rule deletes anything left under `staged/` after 1 day, so uploads that fail mid-ingestion can't accumulate. The happy path still deletes immediately after Airtable re-hosts the file.
+- **There are no per-user quotas.** Any authenticated user can stage files up to Airtable's 5 GB limit. Add rate limiting before promoting it widely.
+
 ## Local development
 ```bash
 cp .dev.vars.example .dev.vars   # fill in secrets
