@@ -51,6 +51,19 @@ Transport: **Streamable HTTP** at `/mcp`, answering with `application/json`.
 
 The server ships a detailed `instructions` block so Claude picks the right tool and follows the correct sequence (resolve IDs → read/write) with minimal prompting.
 
+### How document upload works
+
+`upload_attachment` takes only a **destination** — base, record and attachment field. It has no parameter for file content. Calling it opens an in-chat file picker (an MCP App served as a `ui://` resource); the user selects a file and the browser sends those exact bytes to `/upload`, authorized by a short-lived sealed ticket that names the destination. The Worker streams them to Airtable and drops them.
+
+The model never touches the bytes, and that is the point:
+
+- Tool arguments are produced by the model one character at a time, so base64 in an argument means typing ~1.4 MB per megabyte of file — past any response limit, so uploads stall and never arrive.
+- Where a host hands the model an attached file as extracted text rather than raw bytes, the model cannot reproduce the original at all, and may generate a plausible-looking substitute. Removing the parameter makes that failure impossible.
+
+If a host's iframe CSP blocks the direct POST, the widget falls back to relaying the bytes through the host into the internal `connector_upload_attachment` tool, which forwards them server-to-server. That path is capped near 3 MB by the MCP transport; the direct path supports the full 5 MB.
+
+The ticket is a sealed blob like every other piece of state here — nothing is written down. It carries the caller's Airtable credential, is bound to one record and field so it cannot be redirected, and expires after 15 minutes.
+
 ### File size limit
 
 Airtable's API accepts at most **5 MB** of file bytes per upload. Larger files can only be added through the Airtable UI. Airtable's alternative — having Airtable fetch a public URL — is deliberately **not** used here, because it would require staging the file in storage, which this server does not do.

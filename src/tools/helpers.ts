@@ -7,6 +7,14 @@ export interface ToolContext {
   env: Env;
   userId: string;
   client: AirtableClient;
+  /** Public origin of this Worker, used for widget CSP and the upload URL. */
+  origin: string;
+  /**
+   * The caller's Airtable access token. Needed to seal short-lived upload
+   * tickets, which carry the credential so the browser can send file bytes
+   * without them ever passing through the model. Held only for the request.
+   */
+  accessToken: string;
 }
 
 export type ToolRegistrar = (server: McpServer, ctx: ToolContext) => void;
