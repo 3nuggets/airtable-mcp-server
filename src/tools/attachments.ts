@@ -150,7 +150,7 @@ export const registerAttachmentTools: ToolRegistrar = (server, ctx) => {
         "Not for direct use by the model: call open_upload_picker, which opens the picker. " +
         "Never synthesize `fileBase64` yourself.",
       inputSchema: {
-        ticket: z.string().min(1).describe("Sealed upload ticket from upload_attachment."),
+        ticket: z.string().min(1).describe("Sealed PICKER ticket from open_upload_picker. Tickets from upload_attachment are a different kind and are rejected here."),
         filename: z.string().min(1).describe("Original filename, with extension."),
         fileBase64: z.string().min(1).describe("Base64 of the picked file (data-URI prefix tolerated)."),
         mimeType: z.string().optional().describe("MIME type, if known."),
