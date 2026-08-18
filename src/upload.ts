@@ -24,7 +24,28 @@ import { CORS } from "./oauth";
  * redirected, and expires quickly.
  */
 
-const TICKET_PURPOSE = "airtable-upload-ticket";
+/**
+ * Two ticket kinds, deliberately sealed under DIFFERENT purposes.
+ *
+ * PICKER tickets back the in-chat widget. They are never shown to the model,
+ * and they are the only kind `connector_upload_attachment` will open.
+ *
+ * LOCAL tickets are handed TO the model, for hosts like Claude Code where it can
+ * read real files off disk and push them with the shell. They are accepted only
+ * over HTTP. That asymmetry is the safety property: a host with no filesystem
+ * (claude.ai chat) can still ask for a local ticket, but has no way to spend it
+ * — it cannot run a shell, and the relay tool refuses this purpose outright. So
+ * a model that cannot see a real file cannot invent one and upload it either.
+ */
+const PICKER_TICKET_PURPOSE = "airtable-upload-ticket";
+const LOCAL_TICKET_PURPOSE = "airtable-local-upload";
+
+export type TicketKind = "picker" | "local";
+const PURPOSE: Record<TicketKind, string> = {
+  picker: PICKER_TICKET_PURPOSE,
+  local: LOCAL_TICKET_PURPOSE,
+};
+
 export const MAX_TICKET_TTL_SECONDS = 15 * 60;
 /** Below this there is no point opening a picker — the session dies mid-choice. */
 export const MIN_TICKET_TTL_SECONDS = 30;
@@ -32,8 +53,13 @@ export const MIN_TICKET_TTL_SECONDS = 30;
 export interface UploadTicket {
   airtableAccessToken: string;
   baseId: string;
-  recordId: string;
   attachmentField: string;
+  /**
+   * Picker tickets pin exactly one record. Local tickets may leave this unset,
+   * in which case each upload names its own record — that is what makes a whole
+   * folder processable from one ticket instead of one round-trip per file.
+   */
+  recordId?: string;
 }
 
 /**
@@ -47,26 +73,51 @@ export function ticketTtlSeconds(accessTokenExpiresAt: number, now = Date.now())
   return Math.max(0, Math.min(MAX_TICKET_TTL_SECONDS, remaining));
 }
 
-export function mintUploadTicket(env: Env, ticket: UploadTicket, ttlSeconds: number): Promise<string> {
-  return seal(env.TOKEN_SEALING_KEY, TICKET_PURPOSE, ticket, ttlSeconds);
+export function mintUploadTicket(
+  env: Env,
+  ticket: UploadTicket,
+  ttlSeconds: number,
+  kind: TicketKind,
+): Promise<string> {
+  return seal(env.TOKEN_SEALING_KEY, PURPOSE[kind], ticket, ttlSeconds);
 }
 
-export function openUploadTicket(env: Env, token: string): Promise<UploadTicket | null> {
-  return unseal<UploadTicket>(env.TOKEN_SEALING_KEY, TICKET_PURPOSE, token);
+export function openUploadTicket(
+  env: Env,
+  token: string,
+  kind: TicketKind,
+): Promise<UploadTicket | null> {
+  return unseal<UploadTicket>(env.TOKEN_SEALING_KEY, PURPOSE[kind], token);
+}
+
+/** Open a ticket of either kind, reporting which it was. HTTP accepts both. */
+export async function openAnyUploadTicket(
+  env: Env,
+  token: string,
+): Promise<{ ticket: UploadTicket; kind: TicketKind } | null> {
+  const picker = await openUploadTicket(env, token, "picker");
+  if (picker) return { ticket: picker, kind: "picker" };
+  const local = await openUploadTicket(env, token, "local");
+  if (local) return { ticket: local, kind: "local" };
+  return null;
 }
 
 /**
  * Push bytes to Airtable using a ticket's sealed credentials and destination.
  * Shared by the direct HTTP path and the relay tool so both behave identically.
+ * `recordId` overrides only where the ticket left it open.
  */
 export async function uploadWithTicket(
   ticket: UploadTicket,
-  file: { filename: string; contentType: string; base64: string },
+  file: { filename: string; contentType: string; base64: string; recordId?: string },
 ): Promise<unknown> {
+  // A pinned ticket always wins, so a request can never redirect a picker upload.
+  const recordId = ticket.recordId ?? file.recordId;
+  if (!recordId) throw new Error("No record specified for this upload.");
   const client = new AirtableClient(async () => ticket.airtableAccessToken);
   return uploadAttachment(client, {
     baseId: ticket.baseId,
-    recordId: ticket.recordId,
+    recordId,
     attachmentField: ticket.attachmentField,
     filename: file.filename,
     contentType: file.contentType,
@@ -108,10 +159,11 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
   const rawTicket = request.headers.get("X-Upload-Ticket") || "";
   if (!rawTicket) return json({ error: "Missing upload ticket." }, 401);
 
-  const ticket = await openUploadTicket(env, rawTicket);
-  if (!ticket) {
+  const opened = await openAnyUploadTicket(env, rawTicket);
+  if (!opened) {
     return json({ error: "This upload session has expired. Ask Claude to open the uploader again." }, 401);
   }
+  const ticket = opened.ticket;
 
   // Same reasoning for size: refuse on the declared length rather than after
   // buffering. The allowance over 5 MB covers multipart framing.
@@ -138,14 +190,21 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
 
   const filename = String(form.get("filename") || file.name || "upload");
   const contentType = file.type || String(form.get("contentType") || "application/octet-stream");
+  // Only meaningful for an unpinned (local) ticket; uploadWithTicket ignores it
+  // whenever the ticket already names a record.
+  const recordId = String(form.get("recordId") || "") || undefined;
+  if (!ticket.recordId && !recordId) {
+    return json({ error: "This ticket is not bound to a record — send a `recordId` form field." }, 400);
+  }
 
   try {
     const result = await uploadWithTicket(ticket, {
       filename,
       contentType,
       base64: bytesToBase64(bytes),
+      recordId,
     });
-    return json({ ok: true, filename, size: bytes.byteLength, result });
+    return json({ ok: true, filename, size: bytes.byteLength, recordId: ticket.recordId ?? recordId, result });
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : "Upload failed." }, 502);
   }
