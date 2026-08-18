@@ -13,6 +13,7 @@ import {
 import { buildServer } from "./mcp";
 import { runMessages } from "./transport";
 import { landingPage, privacyPage, termsPage } from "./pages";
+import { handleUpload } from "./upload";
 import {
   FAVICON_SVG,
   FAVICON_SVG_ON_DARK,
@@ -99,6 +100,12 @@ export default {
         if (request.method !== "POST") return methodNotAllowed();
         return handleToken(request, env);
 
+      // Receives file bytes from the in-chat uploader widget, authorized by a
+      // sealed ticket rather than a bearer token. Bytes are forwarded to
+      // Airtable and dropped; nothing is written down.
+      case "/upload":
+        return handleUpload(request, env);
+
       case "/mcp":
         return handleMcp(request, env, origin);
     }
@@ -129,7 +136,7 @@ async function handleMcp(request: Request, env: Env, origin: string): Promise<Re
   }
 
   const messages = Array.isArray(body) ? body : [body];
-  const server = buildServer(env, props);
+  const server = buildServer(env, props, origin);
 
   try {
     const replies = await runMessages(server, messages);

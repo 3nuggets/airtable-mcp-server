@@ -86,7 +86,8 @@ const oauthError = (error: string, description: string, status = 400) =>
 export const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS, DELETE",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, Mcp-Session-Id, MCP-Protocol-Version",
+  "Access-Control-Allow-Headers":
+    "Content-Type, Authorization, Mcp-Session-Id, MCP-Protocol-Version, X-Upload-Ticket",
   "Access-Control-Expose-Headers": "Mcp-Session-Id, WWW-Authenticate",
 };
 

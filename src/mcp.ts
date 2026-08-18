@@ -12,7 +12,7 @@ const INSTRUCTIONS = [
   "",
   "WRITE records with create_records, update_records (PATCH — preserves unsent fields), replace_records (PUT — clears unsent fields), or delete_records. All auto-batch in groups of 10. To upsert, call update_records with performUpsert.fieldsToMergeOn.",
   "",
-  "UPLOAD A DOCUMENT TO AIRTABLE (a main purpose of this server): use upload_attachment on an existing record's attachment field, passing the file bytes as base64 `content`. The bytes stream straight through to Airtable and are never stored anywhere by this server. Airtable's direct upload limit is 5 MB per file — for anything larger, tell the user it exceeds the limit rather than retrying. Create the record first if it does not exist.",
+  "UPLOAD A DOCUMENT TO AIRTABLE (a main purpose of this server): call upload_attachment with the DESTINATION ONLY — baseId, recordId and the attachment field. It opens an in-chat file picker and the user's file is sent from their machine straight to Airtable. You never handle the bytes: there is no content parameter, and you must NOT reconstruct, retype or regenerate a document to upload it. If you cannot read the user's file, that is fine and expected — the picker does not need you to. Uploading a rebuilt lookalike instead of the real file is a serious error. Create the record first if it does not exist. Airtable caps files at 5 MB; larger ones must be added from the Airtable UI.",
   "",
   "DOWNLOAD A DOCUMENT FROM AIRTABLE: use download_attachment to get a fresh temporary URL (valid ~2h) plus metadata; in Claude Code, fetch that URL to save the file locally. Set inline:true to also receive base64 bytes for small files. Attachment URLs from list_records/get_record expire after ~2h — always fetch a fresh one.",
   "",
@@ -26,7 +26,15 @@ const INSTRUCTIONS = [
 /** Public origin, used to point MCP clients at the brand icons. */
 const ORIGIN = "https://airtable-mcp.3nuggets.io";
 
-export function buildServer(env: Env, props: Props): McpServer {
+/**
+ * `requestOrigin` is the origin this request actually arrived on. It must be used
+ * for the upload URL and the widget's CSP: a ticket minted here can only be
+ * opened by the deployment holding this sealing key, so pointing the widget at a
+ * hard-coded origin breaks uploads under `wrangler dev`, preview URLs, or any
+ * second custom domain. The ORIGIN constant stays for the brand icons, which are
+ * public assets that should always resolve to the canonical host.
+ */
+export function buildServer(env: Env, props: Props, requestOrigin: string): McpServer {
   const server = new McpServer(
     {
       name: "airtable-mcp-server",
@@ -58,6 +66,13 @@ export function buildServer(env: Env, props: Props): McpServer {
     return props.airtableAccessToken;
   });
 
-  registerAllTools(server, { env, userId: props.userId, client });
+  registerAllTools(server, {
+    env,
+    userId: props.userId,
+    client,
+    origin: requestOrigin,
+    accessToken: props.airtableAccessToken,
+    accessTokenExpiresAt: props.expiresAt,
+  });
   return server;
 }
