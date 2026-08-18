@@ -13,6 +13,15 @@ import {
 import { buildServer } from "./mcp";
 import { runMessages } from "./transport";
 import { landingPage, privacyPage, termsPage } from "./pages";
+import {
+  FAVICON_SVG,
+  FAVICON_SVG_ON_DARK,
+  FAVICON_32_PNG,
+  APPLE_TOUCH_PNG,
+  ICON_512_PNG,
+  pngResponse,
+  svgResponse,
+} from "./assets";
 
 /**
  * Airtable MCP server — a stateless execution proxy.
@@ -41,6 +50,28 @@ export default {
 
       case "/terms":
         return termsPage(origin);
+
+      // Brand icons. MCP clients and browsers pick the connector's logo up from
+      // here (and from the `icons` declared in the MCP handshake).
+      case "/favicon.svg":
+        return svgResponse(FAVICON_SVG);
+
+      // Browsers request /favicon.ico by convention and expect a raster image.
+      case "/favicon.ico":
+        return pngResponse(FAVICON_32_PNG);
+
+      case "/icon-on-dark.svg":
+        return svgResponse(FAVICON_SVG_ON_DARK);
+
+      case "/favicon-32.png":
+        return pngResponse(FAVICON_32_PNG);
+
+      case "/apple-touch-icon.png":
+      case "/apple-touch-icon-precomposed.png":
+        return pngResponse(APPLE_TOUCH_PNG);
+
+      case "/icon-512.png":
+        return pngResponse(ICON_512_PNG);
 
       case "/health":
         return new Response(JSON.stringify({ ok: true }), {

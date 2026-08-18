@@ -143,6 +143,10 @@ const layout = (title: string, crumb: string, body: string) => `<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${title === SERVICE ? `${SERVICE} · ${BRAND}` : `${title} · ${SERVICE}`}</title>
 <meta name="description" content="${SERVICE} by ${BRAND} — connect Claude to your own Airtable account.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0c0d0a">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="${FONTS}" rel="stylesheet">

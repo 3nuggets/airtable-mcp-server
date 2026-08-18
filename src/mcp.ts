@@ -23,9 +23,31 @@ const INSTRUCTIONS = [
  * Build a server instance for a single request, bound to that caller's Airtable
  * credentials. Nothing is shared between requests or retained after one.
  */
+/** Public origin, used to point MCP clients at the brand icons. */
+const ORIGIN = "https://airtable-mcp.3nuggets.io";
+
 export function buildServer(env: Env, props: Props): McpServer {
   const server = new McpServer(
-    { name: "airtable-mcp-server", version: "2.0.0" },
+    {
+      name: "airtable-mcp-server",
+      title: "Airtable",
+      version: "2.0.0",
+      websiteUrl: "https://3nuggets.io",
+      description:
+        "Read and write Airtable records, schema and comments, and upload or download documents — using your own Airtable account.",
+      // Declares the connector's logo to MCP clients. The tile colour flips so the
+      // mark reads against both light and dark chrome.
+      icons: [
+        { src: `${ORIGIN}/favicon.svg`, mimeType: "image/svg+xml", sizes: ["any"], theme: "light" },
+        {
+          src: `${ORIGIN}/icon-on-dark.svg`,
+          mimeType: "image/svg+xml",
+          sizes: ["any"],
+          theme: "dark",
+        },
+        { src: `${ORIGIN}/icon-512.png`, mimeType: "image/png", sizes: ["512x512"] },
+      ],
+    },
     { instructions: INSTRUCTIONS },
   );
 
