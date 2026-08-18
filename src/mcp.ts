@@ -72,6 +72,7 @@ export function buildServer(env: Env, props: Props, requestOrigin: string): McpS
     client,
     origin: requestOrigin,
     accessToken: props.airtableAccessToken,
+    accessTokenExpiresAt: props.expiresAt,
   });
   return server;
 }

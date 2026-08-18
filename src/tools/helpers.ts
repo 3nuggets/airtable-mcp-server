@@ -15,6 +15,8 @@ export interface ToolContext {
    * without them ever passing through the model. Held only for the request.
    */
   accessToken: string;
+  /** Epoch ms at which that Airtable token expires; caps upload ticket TTLs. */
+  accessTokenExpiresAt: number;
 }
 
 export type ToolRegistrar = (server: McpServer, ctx: ToolContext) => void;

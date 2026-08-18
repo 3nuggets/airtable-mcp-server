@@ -2,7 +2,13 @@ import { z } from "zod";
 import { run, errorResult, type ToolRegistrar } from "./helpers";
 import { downloadAttachment } from "../attachments";
 import { UPLOADER_UI_URI, UPLOADER_WIDGET_HTML } from "../uploader-widget";
-import { mintUploadTicket, uploadWithTicket, openUploadTicket, ticketExpiresAt } from "../upload";
+import {
+  mintUploadTicket,
+  uploadWithTicket,
+  openUploadTicket,
+  ticketTtlSeconds,
+  MIN_TICKET_TTL_SECONDS,
+} from "../upload";
 
 export const registerAttachmentTools: ToolRegistrar = (server, ctx) => {
   const { client, env, origin } = ctx;
@@ -77,13 +83,22 @@ export const registerAttachmentTools: ToolRegistrar = (server, ctx) => {
     },
     async ({ baseId, recordId, attachmentField, destinationLabel }) => {
       try {
-        const ticket = await mintUploadTicket(env, {
-          airtableAccessToken: ctx.accessToken,
-          baseId,
-          recordId,
-          attachmentField,
-        });
-        const expiresAt = ticketExpiresAt();
+        // The ticket carries a snapshot of the Airtable token, so it must not
+        // outlive it — otherwise the picker advertises a live session that
+        // Airtable has already started refusing.
+        const ttl = ticketTtlSeconds(ctx.accessTokenExpiresAt);
+        if (ttl < MIN_TICKET_TTL_SECONDS) {
+          throw new Error(
+            "Your Airtable session is about to expire, so an upload started now would fail part-way. " +
+              "Ask again in a moment — the connector will refresh it — then upload.",
+          );
+        }
+        const ticket = await mintUploadTicket(
+          env,
+          { airtableAccessToken: ctx.accessToken, baseId, recordId, attachmentField },
+          ttl,
+        );
+        const expiresAt = Date.now() + ttl * 1000;
         const label = destinationLabel || `${attachmentField} on ${recordId}`;
 
         // The ticket is a capability: whoever holds it can push bytes to this

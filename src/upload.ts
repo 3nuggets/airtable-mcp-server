@@ -25,7 +25,9 @@ import { CORS } from "./oauth";
  */
 
 const TICKET_PURPOSE = "airtable-upload-ticket";
-const TICKET_TTL_SECONDS = 15 * 60;
+export const MAX_TICKET_TTL_SECONDS = 15 * 60;
+/** Below this there is no point opening a picker — the session dies mid-choice. */
+export const MIN_TICKET_TTL_SECONDS = 30;
 
 export interface UploadTicket {
   airtableAccessToken: string;
@@ -34,17 +36,23 @@ export interface UploadTicket {
   attachmentField: string;
 }
 
-export function mintUploadTicket(env: Env, ticket: UploadTicket): Promise<string> {
-  return seal(env.TOKEN_SEALING_KEY, TICKET_PURPOSE, ticket, TICKET_TTL_SECONDS);
+/**
+ * How long a ticket may live. A ticket carries a snapshot of the caller's
+ * Airtable access token, so it cannot outlive that token: the picker would show
+ * a session that still looks valid while Airtable has already begun rejecting
+ * it. Cap the TTL at whatever the upstream token has left.
+ */
+export function ticketTtlSeconds(accessTokenExpiresAt: number, now = Date.now()): number {
+  const remaining = Math.floor((accessTokenExpiresAt - now) / 1000);
+  return Math.max(0, Math.min(MAX_TICKET_TTL_SECONDS, remaining));
+}
+
+export function mintUploadTicket(env: Env, ticket: UploadTicket, ttlSeconds: number): Promise<string> {
+  return seal(env.TOKEN_SEALING_KEY, TICKET_PURPOSE, ticket, ttlSeconds);
 }
 
 export function openUploadTicket(env: Env, token: string): Promise<UploadTicket | null> {
   return unseal<UploadTicket>(env.TOKEN_SEALING_KEY, TICKET_PURPOSE, token);
-}
-
-/** Epoch ms at which a freshly minted ticket stops working (for display only). */
-export function ticketExpiresAt(): number {
-  return Date.now() + TICKET_TTL_SECONDS * 1000;
 }
 
 /**
