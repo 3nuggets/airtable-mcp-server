@@ -98,10 +98,14 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
 
   // Authenticate BEFORE touching the body. This route is public, so parsing a
   // multipart form first would let anyone make the Worker buffer a large file
-  // it was always going to reject. The widget puts the ticket in the query
-  // string precisely so it can be checked without reading the body.
-  const url = new URL(request.url);
-  const rawTicket = url.searchParams.get("ticket") || "";
+  // it was always going to reject.
+  //
+  // The ticket travels in a HEADER, not the query string. It is a capability
+  // carrying the caller's Airtable token, and URLs are the one part of a request
+  // that edge, proxy and browser diagnostics routinely retain — the same reason
+  // observability is disabled for this Worker. A header is equally readable
+  // before the body is parsed, without that exposure.
+  const rawTicket = request.headers.get("X-Upload-Ticket") || "";
   if (!rawTicket) return json({ error: "Missing upload ticket." }, 401);
 
   const ticket = await openUploadTicket(env, rawTicket);

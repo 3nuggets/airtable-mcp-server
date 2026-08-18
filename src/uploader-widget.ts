@@ -292,12 +292,13 @@ export const UPLOADER_WIDGET_HTML = String.raw`<!DOCTYPE html>
     var form = new FormData();
     form.append("file", file, file.name);
     form.append("filename", file.name);
-    form.append("ticket", cfg.ticket);
-    var sep = cfg.uploadUrl.indexOf("?") === -1 ? "?" : "&";
-    var url = cfg.uploadUrl + sep + "ticket=" + encodeURIComponent(cfg.ticket);
 
+    // The ticket goes in a header, never the URL: it is a capability, and URLs
+    // are what proxies and diagnostics keep. The server reads it before parsing
+    // the body, so this costs nothing but a CORS preflight.
     var xhr = new XMLHttpRequest();
-    xhr.open("POST", url, true);
+    xhr.open("POST", cfg.uploadUrl, true);
+    xhr.setRequestHeader("X-Upload-Ticket", cfg.ticket);
     xhr.upload.onprogress = function (e) {
       if (e.lengthComputable) {
         var pct = Math.round((e.loaded / e.total) * 100);
