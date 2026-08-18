@@ -62,6 +62,20 @@ The model never touches the bytes, and that is the point:
 
 If a host's iframe CSP blocks the direct POST, the widget falls back to relaying the bytes through the host into the internal `connector_upload_attachment` tool, which forwards them server-to-server. That path is capped near 3 MB by the MCP transport; the direct path supports the full 5 MB.
 
+### Uploading from a filesystem (Claude Code)
+
+A picker is the wrong tool where the assistant can genuinely read the user's files. `start_local_upload` returns a ticket that the **shell** spends, so files go from disk to Airtable without their bytes entering the conversation, and a whole folder can be processed unattended:
+
+```bash
+curl -sS -X POST "https://airtable-mcp.3nuggets.io/upload" \
+     -H "X-Upload-Ticket: <ticket>" \
+     -F "file=@./invoices/march.pdf" -F "recordId=recXXXXXXXXXXXXXX"
+```
+
+Omit `recordId` when minting to get one ticket covering many records in the base; pass it to pin the ticket to a single record, after which a `recordId` in the request is ignored.
+
+The two ticket kinds are sealed under **different purposes**, and that is the safety property rather than a matter of instructions. `connector_upload_attachment` opens picker tickets only, so a local ticket can never be spent through a tool call. A host with no filesystem may still request one, but has no shell to spend it with and no relay that will accept it — so an assistant that cannot see a real file has no route to upload an invented one either.
+
 The ticket is a sealed blob like every other piece of state here — nothing is written down. It carries the caller's Airtable credential, is bound to one record and field so it cannot be redirected, and expires after 15 minutes.
 
 ### File size limit

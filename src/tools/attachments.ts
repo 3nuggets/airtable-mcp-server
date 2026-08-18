@@ -97,6 +97,7 @@ export const registerAttachmentTools: ToolRegistrar = (server, ctx) => {
           env,
           { airtableAccessToken: ctx.accessToken, baseId, recordId, attachmentField },
           ttl,
+          "picker",
         );
         const expiresAt = Date.now() + ttl * 1000;
         const label = destinationLabel || `${attachmentField} on ${recordId}`;
@@ -150,7 +151,10 @@ export const registerAttachmentTools: ToolRegistrar = (server, ctx) => {
     },
     async ({ ticket, filename, fileBase64, mimeType }) => {
       try {
-        const opened = await openUploadTicket(env, ticket);
+        // "picker" only. A local-upload ticket must never be spendable through a
+        // tool call, because that is exactly the channel where the bytes would
+        // have to be model-generated.
+        const opened = await openUploadTicket(env, ticket, "picker");
         if (!opened) {
           throw new Error("This upload session has expired. Open the uploader again.");
         }
@@ -163,6 +167,90 @@ export const registerAttachmentTools: ToolRegistrar = (server, ctx) => {
         return {
           content: [{ type: "text" as const, text: `Uploaded "${filename}" to Airtable.` }],
           structuredContent: { ok: true, filename, result },
+        };
+      } catch (e) {
+        return errorResult(e);
+      }
+    },
+  );
+
+  // --- start_local_upload ---------------------------------------------------
+  // For hosts with a real filesystem and a shell (Claude Code). Hands back a
+  // ticket the SHELL spends, so a whole folder can be processed without a picker
+  // and without a single byte crossing the conversation.
+  server.registerTool(
+    "start_local_upload",
+    {
+      title: "Start a scripted upload from the local filesystem",
+      description: [
+        "Get an upload ticket you can spend with the shell, for uploading files that exist on the",
+        "user's filesystem — including many files in one go. Use this INSTEAD of upload_attachment",
+        "when you can actually read the user's files (e.g. Claude Code with folder access).",
+        "",
+        "It returns an upload URL and a ticket. Upload each file with a plain HTTP POST, e.g.:",
+        '  curl -X POST "<uploadUrl>" -H "X-Upload-Ticket: <ticket>" \\',
+        '       -F "file=@/path/to/report.pdf" -F "recordId=recXXXXXXXXXXXXXX"',
+        "",
+        "Omit `recordId` from the tool call to get one ticket that works for MANY records in the",
+        "base — then pass `-F recordId=...` per file. Pass `recordId` to pin the ticket to one record.",
+        "",
+        "Send the real file with `-F file=@<path>`. NEVER write a file yourself and upload that, and",
+        "never hand-build the request body from text you generated — upload only files that already",
+        "exist on disk. The whole point of this path is that the bytes come from the user's disk",
+        "rather than from you.",
+        "",
+        "Typical folder workflow: list the files, create_records to make one record per file, then",
+        "POST each file with its recordId. Airtable caps each file at 5 MB.",
+        "",
+        "The ticket is short-lived. If uploads start returning 401, call this again for a fresh one.",
+      ].join("\n"),
+      inputSchema: {
+        baseId: z.string().describe("Base ID, e.g. appXXXXXXXXXXXXXX"),
+        attachmentField: z.string().describe("Attachment field name or ID (fld...)"),
+        recordId: z
+          .string()
+          .optional()
+          .describe("Pin to one record. Omit to reuse the ticket across records in this base."),
+      },
+    },
+    async ({ baseId, attachmentField, recordId }) => {
+      try {
+        const ttl = ticketTtlSeconds(ctx.accessTokenExpiresAt);
+        if (ttl < MIN_TICKET_TTL_SECONDS) {
+          throw new Error(
+            "Your Airtable session is about to expire, so uploads started now would fail part-way. " +
+              "Ask again in a moment — the connector will refresh it — then upload.",
+          );
+        }
+        const ticket = await mintUploadTicket(
+          env,
+          { airtableAccessToken: ctx.accessToken, baseId, attachmentField, recordId },
+          ttl,
+          "local",
+        );
+        const uploadUrl = `${origin}/upload`;
+        const expiresAt = Date.now() + ttl * 1000;
+        const recordArg = recordId ? "" : ' -F "recordId=recXXXXXXXXXXXXXX"';
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: [
+                `Upload each file straight from disk — do not read the bytes into this conversation:`,
+                "",
+                `  curl -sS -X POST "${uploadUrl}" \\`,
+                `       -H "X-Upload-Ticket: ${ticket}" \\`,
+                `       -F "file=@/path/to/file.pdf"${recordArg}`,
+                "",
+                recordId
+                  ? `This ticket is pinned to ${recordId}; a recordId in the request is ignored.`
+                  : `Pass a recordId per file. Create the records first if they do not exist yet.`,
+                `Valid until ${new Date(expiresAt).toISOString()}. Max 5 MB per file.`,
+                `Upload only files that already exist on disk — never a file you generated.`,
+              ].join("\n"),
+            },
+          ],
+          structuredContent: { uploadUrl, ticket, expiresAt, baseId, attachmentField, recordId },
         };
       } catch (e) {
         return errorResult(e);
