@@ -53,7 +53,7 @@ The server ships a detailed `instructions` block so Claude picks the right tool 
 
 ### How document upload works
 
-`upload_attachment` takes only a **destination** — base, record and attachment field. It has no parameter for file content. Calling it opens an in-chat file picker (an MCP App served as a `ui://` resource); the user selects a file and the browser sends those exact bytes to `/upload`, authorized by a short-lived sealed ticket that names the destination. The Worker streams them to Airtable and drops them.
+`open_upload_picker` takes only a **destination** — base, record and attachment field. It has no parameter for file content. Calling it opens an in-chat file picker (an MCP App served as a `ui://` resource); the user selects a file and the browser sends those exact bytes to `/upload`, authorized by a short-lived sealed ticket that names the destination. The Worker streams them to Airtable and drops them.
 
 The model never touches the bytes, and that is the point:
 
@@ -64,7 +64,7 @@ If a host's iframe CSP blocks the direct POST, the widget falls back to relaying
 
 ### Uploading from a filesystem (Claude Code)
 
-A picker is the wrong tool where the assistant can genuinely read the user's files. `start_local_upload` returns a ticket that the **shell** spends, so files go from disk to Airtable without their bytes entering the conversation, and a whole folder can be processed unattended:
+A picker is the wrong tool where the assistant can genuinely read the user's files — so the natural name belongs to the direct path. `upload_attachment` returns a ticket that the **shell** spends, so files go from disk to Airtable without their bytes entering the conversation, and a whole folder can be processed unattended:
 
 ```bash
 curl -sS -X POST "https://airtable-mcp.3nuggets.io/upload" \
