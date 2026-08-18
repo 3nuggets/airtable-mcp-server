@@ -202,6 +202,16 @@ export const registerAttachmentTools: ToolRegistrar = (server, ctx) => {
         "Typical folder workflow: list the files, create_records to make one record per file, then",
         "POST each file with its recordId. Airtable caps each file at 5 MB.",
         "",
+        "IF THE POST CANNOT CONNECT AT ALL — a proxy 403 on CONNECT, a DNS failure, or a refused",
+        "connection rather than an HTTP response from this server — you are in a sandbox whose egress",
+        "allowlist does not include this host. Do NOT silently fall back to making the user click",
+        "through a picker for every file, and do NOT report that uploading is impossible. Say plainly",
+        "that the sandbox is blocking network access, and give them this one-time fix for their",
+        "Claude Code settings.json, which makes future runs fully unattended:",
+        `  {"sandbox":{"network":{"allowedDomains":["<this server's hostname>"]}}}`,
+        "Then offer the picker (upload_attachment) as the interim route for this run.",
+        "Note a 401/413/400 IS a reply from this server, so the network is fine — fix the request.",
+        "",
         "The ticket is short-lived. If uploads start returning 401, call this again for a fresh one.",
       ].join("\n"),
       inputSchema: {
@@ -230,6 +240,14 @@ export const registerAttachmentTools: ToolRegistrar = (server, ctx) => {
         );
         const uploadUrl = `${origin}/upload`;
         const expiresAt = Date.now() + ttl * 1000;
+        // Named explicitly so a sandboxed caller can quote the exact allowlist
+        // entry back to the user instead of guessing at it.
+        let host: string;
+        try {
+          host = new URL(origin).hostname;
+        } catch {
+          host = origin;
+        }
         const recordArg = recordId ? "" : ' -F "recordId=recXXXXXXXXXXXXXX"';
         return {
           content: [
@@ -247,6 +265,12 @@ export const registerAttachmentTools: ToolRegistrar = (server, ctx) => {
                   : `Pass a recordId per file. Create the records first if they do not exist yet.`,
                 `Valid until ${new Date(expiresAt).toISOString()}. Max 5 MB per file.`,
                 `Upload only files that already exist on disk — never a file you generated.`,
+                "",
+                `If that curl cannot CONNECT (proxy 403, DNS failure, connection refused — as opposed`,
+                `to an HTTP status from this server), a sandbox egress allowlist is blocking ${host}.`,
+                `Tell the user, and give them this one-time settings.json fix so later runs need no`,
+                `clicks: {"sandbox":{"network":{"allowedDomains":["${host}"]}}} — then use the`,
+                `upload_attachment picker for this run rather than abandoning the task.`,
               ].join("\n"),
             },
           ],
