@@ -12,6 +12,7 @@ import {
 } from "./oauth";
 import { buildServer } from "./mcp";
 import { runMessages } from "./transport";
+import { landingPage, privacyPage, termsPage } from "./pages";
 
 /**
  * Airtable MCP server — a stateless execution proxy.
@@ -31,11 +32,15 @@ export default {
 
     switch (url.pathname) {
       case "/":
-        return new Response(
-          "Airtable MCP server. Connect an MCP client to /mcp and sign in with your Airtable account.\n" +
-            "This server stores nothing: no credentials, no records, no documents.\n",
-          { status: 200, headers: { "Content-Type": "text/plain", ...CORS } },
-        );
+        return landingPage(origin);
+
+      // Required by Airtable before users other than the integration owner may
+      // authorize it, and shown to users on the consent screen.
+      case "/privacy":
+        return privacyPage(origin);
+
+      case "/terms":
+        return termsPage(origin);
 
       case "/health":
         return new Response(JSON.stringify({ ok: true }), {

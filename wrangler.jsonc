@@ -17,7 +17,10 @@
     { "tag": "v2", "deleted_classes": ["AirtableMCP"] }
   ],
 
-  "observability": { "enabled": true }
+  // Logging is OFF on purpose. Worker logs retain request URLs, and the OAuth
+  // callback URL carries a sealed blob containing the user's Airtable tokens.
+  // Keeping no logs is consistent with keeping no user data.
+  "observability": { "enabled": false }
 
   // Secrets (set via `npx wrangler secret put <NAME>`):
   //   AIRTABLE_CLIENT_ID       — from your Airtable OAuth integration
