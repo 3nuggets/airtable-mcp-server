@@ -74,6 +74,10 @@ export async function uploadWithTicket(
   });
 }
 
+const OVERSIZE_MESSAGE = (bytes: number): string =>
+  `That file is ${(bytes / 1048576).toFixed(1)} MB. Airtable accepts at most 5 MB through its API — ` +
+  `larger files have to be added from the Airtable UI.`;
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -92,20 +96,31 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
     return json({ error: "Method not allowed" }, 405);
   }
 
+  // Authenticate BEFORE touching the body. This route is public, so parsing a
+  // multipart form first would let anyone make the Worker buffer a large file
+  // it was always going to reject. The widget puts the ticket in the query
+  // string precisely so it can be checked without reading the body.
   const url = new URL(request.url);
-  let form: FormData;
-  try {
-    form = await request.formData();
-  } catch {
-    return json({ error: "Expected a multipart form upload." }, 400);
-  }
-
-  const rawTicket = url.searchParams.get("ticket") || String(form.get("ticket") || "");
+  const rawTicket = url.searchParams.get("ticket") || "";
   if (!rawTicket) return json({ error: "Missing upload ticket." }, 401);
 
   const ticket = await openUploadTicket(env, rawTicket);
   if (!ticket) {
     return json({ error: "This upload session has expired. Ask Claude to open the uploader again." }, 401);
+  }
+
+  // Same reasoning for size: refuse on the declared length rather than after
+  // buffering. The allowance over 5 MB covers multipart framing.
+  const declared = Number(request.headers.get("Content-Length") || 0);
+  if (declared > MAX_DIRECT_UPLOAD_BYTES + 1024 * 1024) {
+    return json({ error: OVERSIZE_MESSAGE(declared) }, 413);
+  }
+
+  let form: FormData;
+  try {
+    form = await request.formData();
+  } catch {
+    return json({ error: "Expected a multipart form upload." }, 400);
   }
 
   const file = form.get("file");
@@ -114,14 +129,7 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
   const bytes = await file.arrayBuffer();
   if (bytes.byteLength === 0) return json({ error: "That file is empty." }, 400);
   if (bytes.byteLength > MAX_DIRECT_UPLOAD_BYTES) {
-    return json(
-      {
-        error:
-          `That file is ${(bytes.byteLength / 1048576).toFixed(1)} MB. Airtable accepts at most ` +
-          `5 MB through its API — larger files have to be added from the Airtable UI.`,
-      },
-      413,
-    );
+    return json({ error: OVERSIZE_MESSAGE(bytes.byteLength) }, 413);
   }
 
   const filename = String(form.get("filename") || file.name || "upload");
