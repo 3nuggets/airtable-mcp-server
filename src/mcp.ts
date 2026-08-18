@@ -26,7 +26,15 @@ const INSTRUCTIONS = [
 /** Public origin, used to point MCP clients at the brand icons. */
 const ORIGIN = "https://airtable-mcp.3nuggets.io";
 
-export function buildServer(env: Env, props: Props): McpServer {
+/**
+ * `requestOrigin` is the origin this request actually arrived on. It must be used
+ * for the upload URL and the widget's CSP: a ticket minted here can only be
+ * opened by the deployment holding this sealing key, so pointing the widget at a
+ * hard-coded origin breaks uploads under `wrangler dev`, preview URLs, or any
+ * second custom domain. The ORIGIN constant stays for the brand icons, which are
+ * public assets that should always resolve to the canonical host.
+ */
+export function buildServer(env: Env, props: Props, requestOrigin: string): McpServer {
   const server = new McpServer(
     {
       name: "airtable-mcp-server",
@@ -62,7 +70,7 @@ export function buildServer(env: Env, props: Props): McpServer {
     env,
     userId: props.userId,
     client,
-    origin: ORIGIN,
+    origin: requestOrigin,
     accessToken: props.airtableAccessToken,
   });
   return server;

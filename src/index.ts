@@ -136,7 +136,7 @@ async function handleMcp(request: Request, env: Env, origin: string): Promise<Re
   }
 
   const messages = Array.isArray(body) ? body : [body];
-  const server = buildServer(env, props);
+  const server = buildServer(env, props, origin);
 
   try {
     const replies = await runMessages(server, messages);

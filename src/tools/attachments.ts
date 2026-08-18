@@ -84,12 +84,16 @@ export const registerAttachmentTools: ToolRegistrar = (server, ctx) => {
           attachmentField,
         });
         const expiresAt = ticketExpiresAt();
-        const payload = {
-          uploadUrl: `${origin}/upload`,
-          ticket,
-          expiresAt,
-          destinationLabel: destinationLabel || `${attachmentField} on ${recordId}`,
-        };
+        const label = destinationLabel || `${attachmentField} on ${recordId}`;
+
+        // The ticket is a capability: whoever holds it can push bytes to this
+        // record for its lifetime. It therefore goes ONLY in `_meta`, the channel
+        // the host hands to the widget. Putting it in `structuredContent` — which
+        // is model-visible — would let the model call connector_upload_attachment
+        // with invented `fileBase64`, recreating the very failure (a generated
+        // lookalike uploaded in place of the user's file) this flow exists to
+        // prevent. Model-visible output below carries no ticket.
+        const widgetPayload = { uploadUrl: `${origin}/upload`, ticket, expiresAt, destinationLabel: label };
         return {
           content: [
             {
@@ -100,8 +104,8 @@ export const registerAttachmentTools: ToolRegistrar = (server, ctx) => {
                 `(upload session valid until ${new Date(expiresAt).toISOString()})`,
             },
           ],
-          structuredContent: payload,
-          _meta: { ui: { resourceUri: UPLOADER_UI_URI }, ...payload },
+          structuredContent: { destinationLabel: label, expiresAt },
+          _meta: { ui: { resourceUri: UPLOADER_UI_URI }, ...widgetPayload },
         };
       } catch (e) {
         return errorResult(e);
